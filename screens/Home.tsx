@@ -44,6 +44,9 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
     const [modalVisible1, setModalVisible1] = useState(false);
     const [modalVisible2, setModalVisible2] = useState(false);
     const [modalData, setModalData] = useState<any>(null);
+    const [isInsideGeofence, setIsInsideGeofence] = useState(false);
+    const [address, setAddress] = useState('');
+    const [deployment, setDeployment] = useState('');
 
     // state to hold location
     const [location, setLocation] = useState<GeoPosition | null>(null);
@@ -72,27 +75,6 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
             }
         };
 
-        const fetchLocation = async () => {
-            try {
-                const permissionResult = await requestLocationPermission();
-
-                if (permissionResult) {
-                    Geolocation.getCurrentPosition(
-                        position => {
-                            setLocation(position);
-                        },
-                        error => {
-                            console.log(error.code, error.message);
-                            setLocation(null); // Set location to null on error
-                        },
-                        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
-                    );
-                }
-            } catch (error) {
-                console.error('Error fetching location:', error);
-            }
-        };
-
         const fetchDateTime = async () => {
             //Get Date & Time
             try {
@@ -108,11 +90,11 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
             }
         };
 
-
         fetchDataFromAsyncStorage();
         checkInternetConnection();
         fetchLocation();
         fetchDateTime();
+        fetchGeofences();
     }, []);
 
       useFocusEffect(
@@ -134,6 +116,121 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
         }, [loading])
     );
 
+    useEffect(() => {
+        if (!modalVisible1 && !modalVisible2) {
+            // Reset modalData when both modals are closed
+            setModalData(null);
+        }
+    }, [modalVisible1, modalVisible2]);
+
+    const fetchGeofences = async () => {
+        try {
+            const geofencesCollection = firestore().collection('Geofences');
+            const unsubscribe = geofencesCollection.onSnapshot(snapshot => {
+                const geofences = snapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                }));
+                // Call a function to check if user is inside any geofence
+                checkInsideGeofence(geofences);
+                console.log(geofences);
+            });
+            return () => unsubscribe();
+        } catch (error) {
+            console.error('Error fetching geofences:', error);
+        }
+    };
+
+    const checkInsideGeofence = async (geofences: any[]) => {
+        try {
+            const hasPermission = await requestLocationPermission();
+            if (!hasPermission) {
+                // Location permission not granted, return early
+                console.log('Location permission not granted.');
+                return;
+            }
+
+            const position: GeoPosition = await new Promise((resolve, reject) => {
+                Geolocation.getCurrentPosition(
+                    resolve,
+                    reject,
+                    { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
+                );
+            });
+    
+            // Get user's current position
+            const userLatitude: number = position.coords.latitude;
+            const userLongitude: number = position.coords.longitude;
+    
+            // Check if the user's location is inside any geofence
+            const matchedGeofence = geofences.find((geofence: any) => {
+                // Calculate distance between user's location and geofence center
+                const distance = calculateDistance(
+                    userLatitude,
+                    userLongitude,
+                    geofence.location.latitude,
+                    geofence.location.longitude
+                );
+                // Check if distance is within the geofence radius (in meters)
+                return distance <= parseFloat(geofence.radius);
+            });
+    
+            if (matchedGeofence) {
+                // User is inside a geofence
+                console.log('User is inside geofence:', matchedGeofence);
+    
+                // Extract address and deployment from the matched geofence
+                const { address, deployment } = matchedGeofence;
+                setAddress(address);
+                setDeployment(deployment);
+                console.log('Address:', address);
+                console.log('Deployment:', deployment);
+    
+                // Update state or perform any other action with the address and deployment data
+            } else {
+                // User is not inside any geofence
+                console.log('User is not inside any geofence.');
+            }
+            setIsInsideGeofence(matchedGeofence);
+        } catch (error) {
+            console.error('Error checking inside geofence:', error);
+        }
+    };
+
+    const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+        const R = 6371 * 1000; // Radius of the Earth in meters
+        const dLat = (lat2 - lat1) * (Math.PI / 180); // Convert degrees to radians
+        const dLon = (lon2 - lon1) * (Math.PI / 180); // Convert degrees to radians
+        const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        const distance = R * c; // Distance in meters
+        return distance;
+    };
+
+    const fetchLocation = async () => {
+        try {
+            const permissionResult = await requestLocationPermission();
+
+            if (permissionResult) {
+                Geolocation.getCurrentPosition(
+                    position => {
+                        setLocation(position);
+                    },
+                    error => {
+                        console.log(error.code, error.message);
+                        setLocation(null); // Set location to null on error
+                    },
+                    { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
+                );
+            }
+        } catch (error) {
+            console.error('Error fetching location:', error);
+        }
+    };
+
     const handleActivity = async (booleanValue: boolean) => {
 
         setLoading(true);
@@ -143,6 +240,18 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
         if (!netInfoState.isConnected) {
             setLoading(false);
             Toast.show('No internet connection.', Toast.LONG);
+            return;
+        }
+
+        // Fetch location and geofences
+        await Promise.all([fetchLocation()]);
+        fetchGeofences();
+        console.log('Location: ', location, '\nDate & Time: ', dateTime);
+
+        // Check if user is inside any geofence
+        if (!isInsideGeofence) {
+            setLoading(false);
+            setModalVisible1(true);
             return;
         }
 
@@ -222,7 +331,7 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
             // Handle API response as needed
         } catch (error) {
             setLoading(false);
-            console.error('Error sending image to API:', error);
+            Toast.show('Error sending image', Toast.LONG);
         }
       };
 
@@ -241,39 +350,48 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
             // Handle error
             console.error('Error fetching Philippine time:', error);
           }
+        
+        // Fetch user data from the 'Users' collection
+        const userDoc = await firestore()
+            .collection('Users')
+            .doc(pin.toString())
+            .get();
 
-        //Send Data to Firestore
-        try {
-            firestore()
-                .collection('Users')
-                .doc(pin.toString())
-                .update({
-                    status: booleanValue ? 'Timed In' : 'Pulled Out',
-                    timestamp: new Date(dateTime),
-                    location: location ? new firestore.GeoPoint(location.coords.latitude, location.coords.longitude) : null,
-                })
-                .then(() => {
+        if (userDoc.exists) {
+            const userData = userDoc.data();
+            if (userData && userData.name) {
+                const userName = userData.name;
+
+                //Send Data to Firestore
+                try {
                     firestore()
-                        .collection('Logs')
-                        .add({
-                            status: yourBooleanVariable ? 'Timed In' : 'Pulled Out',
-                            timestamp: new Date(dateTime),
-                            location: location ? new firestore.GeoPoint(location.coords.latitude, location.coords.longitude) : null,
+                    .collection('Logs')
+                    .add({
+                        status: booleanValue ? 'Timed In' : 'Pulled Out',
+                        timestamp: new Date(dateTime),
+                        location: location ? new firestore.GeoPoint(location.coords.latitude, location.coords.longitude) : null,
+                        address: address,
+                        deployment: deployment,
+                        name: userName,
+                        badgeNumber: pin.toString(),
+                        })
+                        .then(() => {
+                            setLoading(false);
+                            console.log('Log created!');
+                            setModalVisible2(true);
+                        })
+                        .catch(error => {
+                            console.error('Error creating log:', error);
                         });
-                })
-                .then(() => {
-                    setLoading(false);
-                    console.log('User updated!');
-                    console.log('Log created!');
-                    setModalVisible2(true);
-                })
-                .catch(error => {
-                    console.error('Error updating user:', error);
-                    console.error('Error creating log:', error);
-                });
-                console.log(booleanValue ? 'Timed In' : 'Pulled Out');
-        } catch (e) {
-            console.log(e);
+                        console.log(booleanValue ? 'Timed In' : 'Pulled Out');
+                } catch (e) {
+                    console.log(e);
+                }
+            } else {
+                console.log('User data is missing or does not contain a name field.');
+            }
+        } else {
+            console.log('User data not found for ID:', pin);
         }
     };
 
@@ -384,6 +502,7 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
             } }>
                 <View style={styles.modalContainer}>
                     <View style={styles.modalContent}>
+                        {!isInsideGeofence && <Text style={styles.textMod1}>You are not inside any geofence. Please move to a valid location.</Text>}
                         {modalData && <Text style={styles.textMod1}>{modalData}</Text>}
                         <TouchableOpacity onPress={() => setModalVisible1(false)}>
                             <Text style={styles.textMod2}>Close</Text>
@@ -402,6 +521,8 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
                     <View style={styles.modalContent}>
                         <Text style={{color: Color.darkblue, fontSize: 16,}}>You are now {yourBooleanVariable ? 'Timed In' : 'Pulled Out'}</Text>
                         {modalData && <Text style={styles.textMod1}>{modalData}</Text>}
+                        {address && <Text style={{color: Color.darkblue, fontSize: 16,}}>At {address}</Text>}
+                        {deployment && <Text style={{color: Color.darkblue, fontSize: 16,}}>As {deployment}</Text>}
                         <TouchableOpacity onPress={() => setModalVisible2(false)}>
                             <Text style={styles.textMod2}>Close</Text>
                         </TouchableOpacity>
