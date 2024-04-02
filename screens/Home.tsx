@@ -90,11 +90,25 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
             }
         };
 
-        fetchDataFromAsyncStorage();
-        checkInternetConnection();
-        fetchLocation();
-        fetchDateTime();
-        fetchGeofences();
+        const fetchData = async () => {
+            try {
+                const hasLocationPermission = await requestLocationPermission();
+                if (hasLocationPermission) {
+                    // Fetch data from AsyncStorage, check internet connection, and fetch other data
+                    fetchDataFromAsyncStorage();
+                    checkInternetConnection();
+                    fetchLocation();
+                    fetchDateTime();
+                    fetchGeofences();
+                } else {
+                    console.log('Location permission not granted.');
+                }
+            } catch (error) {
+                console.error(error);
+            }
+        };
+    
+        fetchData();
     }, []);
 
       useFocusEffect(
@@ -125,6 +139,12 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
 
     const fetchGeofences = async () => {
         try {
+            const hasPermission = await requestLocationPermission();
+            if (!hasPermission) {
+                // Location permission not granted, return early
+                console.log('Location permission not granted.');
+                return;
+            }
             const geofencesCollection = firestore().collection('Geofences');
             const unsubscribe = geofencesCollection.onSnapshot(snapshot => {
                 const geofences = snapshot.docs.map(doc => ({
@@ -143,13 +163,6 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
 
     const checkInsideGeofence = async (geofences: any[]) => {
         try {
-            const hasPermission = await requestLocationPermission();
-            if (!hasPermission) {
-                // Location permission not granted, return early
-                console.log('Location permission not granted.');
-                return;
-            }
-
             const position: GeoPosition = await new Promise((resolve, reject) => {
                 Geolocation.getCurrentPosition(
                     resolve,
@@ -302,7 +315,7 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
             });
     
             // Send the resized image to the API
-            const response = await fetch('http://192.168.0.29:5000/compare_faces', {
+            const response = await fetch('https://hanzelmamarungkas.pythonanywhere.com/compare_faces', {
                 method: 'POST',
                 body: formData,
                 headers: {

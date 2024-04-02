@@ -13,7 +13,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import LoginScreen from './screens/LogIn';
 import HomeScreen from './screens/Home';
 import SplashScreen1 from './screens/SplashScreen1';
-import DataSentSuccessScreen from './screens/DataSentSuccess';
 
 const Stack = createNativeStackNavigator();
 
@@ -66,11 +65,6 @@ const MyStack = () => {
             <Stack.Screen name="Home" options={{headerShown: false}}>
               {props => <HomeScreen {...props} onLogin={onLogin} />}
             </Stack.Screen>
-            <Stack.Screen
-              name="DataSentSuccess"
-              component={DataSentSuccessScreen}
-              options={{headerShown: false}}
-            />
           </Stack.Navigator>
         ) : (
           <Stack.Navigator>
