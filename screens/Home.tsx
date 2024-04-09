@@ -1,7 +1,7 @@
 /* eslint-disable prettier/prettier */
 import Geolocation, { GeoPosition } from 'react-native-geolocation-service';
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, View, PermissionsAndroid, Image, ImageBackground, TouchableOpacity, ActivityIndicator, BackHandler, Modal } from 'react-native';
+import { StyleSheet, Text, View, PermissionsAndroid, ImageBackground, TouchableOpacity, ActivityIndicator, BackHandler, Modal, Alert } from 'react-native';
 import { Border, Color, FontFamily, FontSize } from '../GlobalStyles';
 import { NavigationProp, useFocusEffect } from '@react-navigation/native';
 import { horizontalScale, moderateScale, verticalScale } from '../Metrics';
@@ -11,11 +11,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import ImagePicker from 'react-native-image-crop-picker';
 import ImageResizer from 'react-native-image-resizer';
+import { LatLng, LeafletView, MapShapeType, WebViewLeafletEvents, WebviewLeafletMessage } from 'react-native-leaflet-view';
 
 type HomeProps = {
     navigation: NavigationProp<any>;
     onLogin?: () => void;
 };
+
+type LatLngObject = { lat: number; lng: number };
 
 const requestLocationPermission = async () => {
     try {
@@ -47,9 +50,14 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
     const [isInsideGeofence, setIsInsideGeofence] = useState(false);
     const [address, setAddress] = useState('');
     const [deployment, setDeployment] = useState('');
-
-    // state to hold location
     const [location, setLocation] = useState<GeoPosition | null>(null);
+    const [watchId, setWatchId] = useState<number | null>(null);
+    const [geofences, setGeofences] = useState<any>([]);
+
+    const DEFAULT_COORDINATE: LatLng = {
+        lat: location ? location.coords.latitude : 8.478491946468438,
+        lng: location ? location.coords.longitude : 124.64200829540064,
+      };
 
     useEffect(() => {
         const fetchDataFromAsyncStorage = async () => {
@@ -97,8 +105,8 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
                     // Fetch data from AsyncStorage, check internet connection, and fetch other data
                     fetchDataFromAsyncStorage();
                     checkInternetConnection();
-                    fetchLocation();
                     fetchDateTime();
+                    fetchLocation();
                     fetchGeofences();
                 } else {
                     console.log('Location permission not granted.');
@@ -137,6 +145,71 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
         }
     }, [modalVisible1, modalVisible2]);
 
+    const onMessageReceived = (message: WebviewLeafletMessage) => {
+        switch (message.event) {
+            case WebViewLeafletEvents.ON_MAP_TOUCHED:
+                if (message.payload && message.payload.touchLatLng) {
+                    const position: LatLngObject = message.payload.touchLatLng as LatLngObject;
+                    // Check if the touched position is inside any geofence
+                    const matchedGeofence = geofences.find((geofence: any) => {
+                        const distance = calculateDistance(
+                            position.lat,
+                            position.lng,
+                            geofence.location.latitude,
+                            geofence.location.longitude
+                        );
+                        return distance <= parseFloat(geofence.radius);
+                    });
+                    if (matchedGeofence) {
+                        // If position is inside a geofence, show alert with address and deployment
+                        Alert.alert('Geofence Information', `Address: ${matchedGeofence.address}\n\nDeployment: ${matchedGeofence.deployment}`);
+                    }
+                } else {
+                    // Handle the case when payload or touchLatLng is undefined
+                    console.error("Payload or touchLatLng is undefined.");
+                }
+                break;
+            case WebViewLeafletEvents.ON_MAP_MARKER_CLICKED:
+                // Handle the onMapMarkerClicked event
+                break;
+            case WebViewLeafletEvents.ON_MOVE:
+                // Handle the onMove event
+                break;
+            case WebViewLeafletEvents.ON_MOVE_END:
+                // Handle the onMoveEnd event
+                break;
+            case WebViewLeafletEvents.ON_MOVE_START:
+                // Handle the onMoveStart event
+                break;
+            case WebViewLeafletEvents.ON_ZOOM:
+                // Handle the onZoom event
+                break;
+            case WebViewLeafletEvents.ON_ZOOM_END:
+                // Handle the onZoomEnd event
+                break;
+            case WebViewLeafletEvents.ON_ZOOM_START:
+                // Handle the onZoomStart event
+                break;
+            case WebViewLeafletEvents.ON_RESIZE:
+                // Handle the onZoomStart event
+                break;
+            case WebViewLeafletEvents.ON_VIEW_RESET:
+                // Handle the onViewReset event
+                break;
+            case WebViewLeafletEvents.ON_UNLOAD:
+                // Handle the onUnload event
+                break;
+            case WebViewLeafletEvents.ON_ZOOM_LEVELS_CHANGE:
+                // Handle the onViewReset event
+                break;
+            // Add cases for other events if needed
+            default:
+                // Handle other events
+                console.log("Unhandled event:", message.event);
+                break;
+        }
+    };    
+
     const fetchGeofences = async () => {
         try {
             const hasPermission = await requestLocationPermission();
@@ -147,12 +220,12 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
             }
             const geofencesCollection = firestore().collection('Geofences');
             const unsubscribe = geofencesCollection.onSnapshot(snapshot => {
-                const geofences = snapshot.docs.map(doc => ({
+                const geofence = snapshot.docs.map(doc => ({
                     id: doc.id,
                     ...doc.data()
                 }));
-                // Call a function to check if user is inside any geofence
-                checkInsideGeofence(geofences);
+                setGeofences(geofence);
+                checkInsideGeofence(geofence);
                 console.log(geofences);
             });
             return () => unsubscribe();
@@ -161,7 +234,7 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
         }
     };
 
-    const checkInsideGeofence = async (geofences: any[]) => {
+    const checkInsideGeofence = async (geofence: any[]) => {
         try {
             const position: GeoPosition = await new Promise((resolve, reject) => {
                 Geolocation.getCurrentPosition(
@@ -176,7 +249,7 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
             const userLongitude: number = position.coords.longitude;
     
             // Check if the user's location is inside any geofence
-            const matchedGeofence = geofences.find((geofence: any) => {
+            const matchedGeofence = geofence.find((geofence: any) => {
                 // Calculate distance between user's location and geofence center
                 const distance = calculateDistance(
                     userLatitude,
@@ -198,13 +271,15 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
                 setDeployment(deployment);
                 console.log('Address:', address);
                 console.log('Deployment:', deployment);
-    
+
+                setIsInsideGeofence(true);
                 // Update state or perform any other action with the address and deployment data
             } else {
                 // User is not inside any geofence
                 console.log('User is not inside any geofence.');
+                setIsInsideGeofence(false);
             }
-            setIsInsideGeofence(matchedGeofence);
+            //setIsInsideGeofence(matchedGeofence);
         } catch (error) {
             console.error('Error checking inside geofence:', error);
         }
@@ -226,9 +301,10 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
     const fetchLocation = async () => {
         try {
             const permissionResult = await requestLocationPermission();
-
+    
             if (permissionResult) {
-                Geolocation.getCurrentPosition(
+                // Start watching for location changes
+                const id = Geolocation.watchPosition(
                     position => {
                         setLocation(position);
                     },
@@ -236,13 +312,25 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
                         console.log(error.code, error.message);
                         setLocation(null); // Set location to null on error
                     },
-                    { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
+                    { enableHighAccuracy: true, distanceFilter: 1.5},
                 );
+                
+                // Set the watch ID in the state
+                setWatchId(id);
             }
         } catch (error) {
             console.error('Error fetching location:', error);
         }
     };
+    
+    // Clear the watch when the component unmounts
+    useEffect(() => {
+        return () => {
+            if (watchId !== null) {
+                Geolocation.clearWatch(watchId);
+            }
+        };
+    }, [watchId]);
 
     const handleActivity = async (booleanValue: boolean) => {
 
@@ -255,9 +343,6 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
             Toast.show('No internet connection.', Toast.LONG);
             return;
         }
-
-        // Fetch location and geofences
-        await Promise.all([fetchLocation()]);
         fetchGeofences();
         console.log('Location: ', location, '\nDate & Time: ', dateTime);
 
@@ -266,31 +351,31 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
             setLoading(false);
             setModalVisible1(true);
             return;
-        }
-
-        //Launch Camera
-        ImagePicker.openCamera({
-            mediaType: 'photo',
-            useFrontCamera: true,
-        }).then((image) => {
-            console.log(image);
-            if (image) {
-                sendImageToAPI(image, booleanValue);
-            } else {
-                console.log('Image source is undefined.');
-            }
-        }).catch((error) => {
-            setLoading(false);
-            // Handle any errors that occur during camera opening
-            if (error.code === 'E_PICKER_CANCELLED') {
-                // Camera was closed without taking a picture
-                console.log('Camera closed without taking a picture.');
-            } else {
+        }else{
+            //Launch Camera
+            ImagePicker.openCamera({
+                mediaType: 'photo',
+                useFrontCamera: true,
+            }).then((image) => {
+                console.log(image);
+                if (image) {
+                    sendImageToAPI(image, booleanValue);
+                } else {
+                    console.log('Image source is undefined.');
+                }
+            }).catch((error) => {
                 setLoading(false);
-                // Handle other errors
-                console.error(error);
-            }
-        });
+                // Handle any errors that occur during camera opening
+                if (error.code === 'E_PICKER_CANCELLED') {
+                    // Camera was closed without taking a picture
+                    console.log('Camera closed without taking a picture.');
+                } else {
+                    setLoading(false);
+                    // Handle other errors
+                    console.error(error);
+                }
+            });
+        }
     };
 
     const sendImageToAPI = async (imageData: any, booleanValue: boolean) => {
@@ -428,6 +513,31 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
             style={styles.backgroundImage}
         >
             <View style={styles.container}>
+                <View style={styles.map}>
+                        <LeafletView
+                            onMessageReceived={onMessageReceived}
+                            mapCenterPosition={DEFAULT_COORDINATE}
+                            zoom={17}
+                            mapMarkers={[
+                                {
+                                  position: DEFAULT_COORDINATE,
+                                  icon: 'https://cdn-icons-png.flaticon.com/512/7987/7987463.png',
+                                  size: [25, 25],
+                                  iconAnchor:[5.5, 25],
+                                },
+                            ]}
+                            mapShapes={geofences.map((geofence: any) => ({
+                                shapeType: MapShapeType.CIRCLE,
+                                color: "#f03",
+                                id: geofence.id, // Use geofence ID as the unique identifier
+                                center: {
+                                    lat: geofence.location.latitude,
+                                    lng: geofence.location.longitude,
+                                },
+                                radius: parseFloat(geofence.radius), // Convert radius to number
+                            }))}
+                        />
+                </View>
                 <View style={styles.userName}>
                     <Text style={styles.userText}>User: {pin}</Text>
                 </View>
@@ -438,12 +548,6 @@ const Home: React.FC<HomeProps> = ({ navigation, onLogin }) => {
                         } }>
                         <Text style={styles.logoutText}>LOG OUT</Text>
                     </TouchableOpacity>
-                </View>
-                <View style={[styles.logoShadow, styles.logoLayout]} />
-                <View style={[styles.logo, styles.logoLayout]}>
-                    <Image
-                        source={require('../assets/LOGO.png')}
-                        style={styles.logoImage} />
                 </View>
                 <View style={styles.patrolOptionWindow}>
                     <Text style={[styles.patrolOption, styles.patrolOptionTypo]}>PATROL ATTENDANCE</Text>
@@ -555,6 +659,11 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         alignItems: 'center',
+    },
+    map: {
+        marginTop: verticalScale(50),
+        width: '100%',
+        height: '48.5%',
     },
     container2: {
         marginTop: '15%',
